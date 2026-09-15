@@ -1,0 +1,310 @@
+import io.restassured.RestAssured;
+import io.restassured.http.ContentType;
+import io.restassured.response.Response;
+import io.restassured.specification.RequestSpecification;
+import org.junit.jupiter.api.*;
+import org.assertj.core.api.Assertions;
+
+import java.util.List;
+import java.util.UUID;
+
+import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.*;
+
+/**
+ * Класс для проверки работы API управления товарами.
+ */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class MainTest {
+
+    private static final String BASE_URL = "http://localhost:8080";
+
+    // Храним ID созданного товара, чтобы использовать его в тестах на обновление и удаление
+    private static int createdProductId = 0;
+
+    // Настройки запроса с авторизацией, чтобы не дублировать их в каждом тесте
+    private static RequestSpecification authSpec;
+
+    @BeforeEach
+    void setUp() {
+        RestAssured.baseURI = BASE_URL;
+
+        // Настраиваем базовую авторизацию для всех запросов
+        authSpec = given()
+                .baseUri(BASE_URL)
+                .auth().basic("admin", "secret123");
+    }
+
+    
+    // ЗАДАЧА 1: Тесты для получения списка и добавления товара
+    
+
+    /**
+     * Проверяем, что список товаров возвращается успешно.
+     * Используем классический стиль REST Assured: given -> when -> then.
+     */
+    @Test
+    @DisplayName("Задача 1.1: Получение списка товаров (given/when/then)")
+    public void testGetGoodsListWithGivenWhenThen() {
+        given()
+                .spec(authSpec)
+                .queryParam("size", 1)
+                .when()
+                .get("/goods/list")
+                .then()
+                .statusCode(200);
+    }
+
+    /**
+     * Аналогичная проверка, но с явным использованием спецификации запроса.
+     */
+    @Test
+    @DisplayName("Задача 1.2: Получение списка товаров (RequestSpecification)")
+    public void testGetGoodsListWithRequestSpecification() {
+        given()
+                .spec(authSpec)
+                .queryParam("size", 1)
+                .when()
+                .get("/goods/list")
+                .then()
+                .statusCode(200);
+    }
+
+    /**
+     * Создаем новый товар и проверяем, что он появился в списке.
+     * Для проверки используем встроенные хамкресты (Hamcrest).
+     */
+    @Test
+    @DisplayName("Задача 1.3: Создание товара и проверка через Hamcrest")
+    public void testCreateAndGetGoodsWithHamcrest() {
+        // Генерируем уникальное имя, чтобы сервер не ругался на дубликаты
+        String uniqueName = "Test Product Hamcrest Unique " + UUID.randomUUID().toString().substring(0, 8);
+        String jsonBody = "{\"name\": \"" + uniqueName + "\", \"price\": 150.0}";
+
+        // Отправляем запрос на создание
+        Response response = given()
+                .spec(authSpec)
+                .contentType(ContentType.JSON)
+                .body(jsonBody)
+                .when()
+                .post("/goods/add")
+                .then()
+                .statusCode(200)
+                .extract()
+                .response();
+
+        // Теперь запрашиваем полный список и ищем там наш товар
+        given()
+                .spec(authSpec)
+                .queryParam("size", 100)
+                .when()
+                .get("/goods/list")
+                .then()
+                .statusCode(200)
+                .body("goods.name", hasItem(uniqueName))
+                .body("goods.price", hasItem(150.0f));
+    }
+
+    /**
+     * Создаем товар и проверяем его наличие через библиотеку AssertJ.
+     * Это дает более читаемые сообщения об ошибках при падении теста.
+     */
+    @Test
+    @DisplayName("Задача 1.4: Создание товара и проверка через AssertJ")
+    public void testCreateAndGetGoodsWithAssertJ() {
+        // Генерируем уникальное имя
+        String uniqueName = "Test Product AssertJ Unique " + UUID.randomUUID().toString().substring(0, 8);
+        String jsonBody = "{\"name\": \"" + uniqueName + "\", \"price\": 250.0}";
+
+        // Создаем товар
+        given()
+                .spec(authSpec)
+                .contentType(ContentType.JSON)
+                .body(jsonBody)
+                .when()
+                .post("/goods/add")
+                .then()
+                .statusCode(200);
+
+        // Получаем список товаров
+        Response response = given()
+                .spec(authSpec)
+                .queryParam("size", 100)
+                .when()
+                .get("/goods/list")
+                .then()
+                .statusCode(200)
+                .extract()
+                .response();
+
+        // Извлекаем списки имен и цен из JSON ответа
+        List<String> names = response.jsonPath().getList("goods.name");
+        Assertions.assertThat(names)
+                .as("Список товаров должен содержать созданный элемент")
+                .contains(uniqueName);
+
+        List<Float> prices = response.jsonPath().getList("goods.price", Float.class);
+        Assertions.assertThat(prices)
+                .as("Цена созданного товара должна совпадать")
+                .contains(250.0f);
+    }
+
+    
+    // ЗАДАЧА 2: Полное покрытие API (CRUD операции)
+    
+
+    /**
+     * Проверяем базовую работу эндпоинта получения списка с пагинацией.
+     */
+    @Test
+    @Order(1)
+    @DisplayName("Задача 2: Проверка GET /goods/list")
+    public void testGetGoodsListCoverage() {
+        given()
+                .spec(authSpec)
+                .param("page", 0)
+                .param("size", 10)
+                .when()
+                .get("/goods/list")
+                .then()
+                .statusCode(200);
+    }
+
+    /**
+     * Создаем товар для дальнейших тестов.
+     * Сохраняем его ID, чтобы потом проверить чтение, обновление и удаление.
+     */
+    @Test
+    @Order(2)
+    @DisplayName("Задача 2: Проверка POST /goods/add")
+    public void testPostGoodsAddCoverage() {
+        // Уникальное имя нужно, чтобы избежать конфликта имен на сервере
+        String uniqueName = "API Test Item Coverage " + UUID.randomUUID().toString().substring(0, 8);
+        String jsonBody = "{\"name\": \"" + uniqueName + "\", \"price\": 50.0}";
+
+        Response response = given()
+                .spec(authSpec)
+                .contentType(ContentType.JSON)
+                .body(jsonBody)
+                .when()
+                .post("/goods/add")
+                .then()
+                .statusCode(200)
+                .extract()
+                .response();
+
+        // Берем ID из ответа сервера
+        createdProductId = response.jsonPath().getInt("data.id");
+
+        // Убеждаемся, что ID действительно присвоился
+        Assertions.assertThat(createdProductId).isGreaterThan(0);
+    }
+
+    /**
+     * Проверяем, что сервер может вернуть данные конкретного товара по ID.
+     */
+    @Test
+    @Order(3)
+    @DisplayName("Задача 2: Проверка GET /goods/{id}")
+    public void testGetGoodsByIdCoverage() {
+        if (createdProductId == 0) {
+            throw new IllegalStateException("Сначала нужно создать товар в тесте testPostGoodsAddCoverage");
+        }
+
+        given()
+                .spec(authSpec)
+                .pathParam("id", createdProductId)
+                .when()
+                .get("/goods/{id}")
+                .then()
+                .statusCode(200)
+                // Проверяем, что в ответе вернулся тот же ID, который мы запрашивали
+                .body("id", equalTo(createdProductId));
+    }
+
+    /**
+     * Обновляем название существующего товара.
+     * Используем PATCH запрос.
+     */
+    @Test
+    @Order(4)
+    @DisplayName("Задача 2: Проверка PATCH /goods/{id}")
+    public void testPatchGoodsByIdCoverage() {
+        if (createdProductId == 0) {
+            throw new IllegalStateException("Сначала нужно создать товар в тесте testPostGoodsAddCoverage");
+        }
+
+        // Новое уникальное имя, чтобы сервер принял обновление
+        String uniqueNewName = "Updated Item Coverage " + UUID.randomUUID().toString().substring(0, 8);
+        String jsonBody = "{\"name\": \"" + uniqueNewName + "\"}";
+
+        // Отправляем запрос на обновление
+        given()
+                .spec(authSpec)
+                .contentType(ContentType.JSON)
+                .pathParam("id", createdProductId)
+                .body(jsonBody)
+                .when()
+                .patch("/goods/{id}")
+                .then()
+                .statusCode(200);
+
+        // Проверяем, что данные действительно изменились
+        given()
+                .spec(authSpec)
+                .pathParam("id", createdProductId)
+                .when()
+                .get("/goods/{id}")
+                .then()
+                .statusCode(200)
+                .body("name", equalTo(uniqueNewName));
+    }
+
+    /**
+     * Удаляем созданный товар.
+     */
+    @Test
+    @Order(5)
+    @DisplayName("Задача 2: Проверка DELETE /goods/{id}")
+    public void testDeleteGoodsByIdCoverage() {
+        if (createdProductId == 0) {
+            throw new IllegalStateException("Сначала нужно создать товар в тесте testPostGoodsAddCoverage");
+        }
+
+        // Удаляем товар
+        given()
+                .spec(authSpec)
+                .pathParam("id", createdProductId)
+                .when()
+                .delete("/goods/{id}")
+                .then()
+                .statusCode(200);
+
+        // Проверяем, что сервер больше не может найти этот товар (ошибка 404)
+        given()
+                .spec(authSpec)
+                .pathParam("id", createdProductId)
+                .when()
+                .get("/goods/{id}")
+                .then()
+                .statusCode(404);
+    }
+
+    /**
+     * Проверяем обработку ошибок: пытаемся обновить несуществующий товар.
+     */
+    @Test
+    @Order(6)
+    @DisplayName("Задача 2: Проверка обработки ошибок (Not Found)")
+    public void testPatchGoodsBadRequestCoverage() {
+        given()
+                .spec(authSpec)
+                .contentType(ContentType.JSON)
+                .pathParam("id", 99999) // ID, которого точно нет в базе
+                .body("{\"name\": \"Test\"}")
+                .when()
+                .patch("/goods/{id}")
+                .then()
+                .statusCode(404); // Сервер должен вернуть ошибку "не найдено"
+    }
+}
